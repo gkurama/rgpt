@@ -1,0 +1,8 @@
+{
+  "name": "Registro de Ponto",
+  "description": "Aplicativo para controle de ponto dos colaboradores com detecção de atrasos, relatórios periódicos, geolocalização e suporte offline.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
