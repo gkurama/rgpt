@@ -47,6 +47,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val _syncError = MutableStateFlow<String?>(null)
     val syncError: StateFlow<String?> = _syncError.asStateFlow()
 
+    private val _lastSyncTime = MutableStateFlow<Long?>(null)
+    val lastSyncTime: StateFlow<Long?> = _lastSyncTime.asStateFlow()
+
     init {
         val db = AppDatabase.getDatabase(application)
         repository = TimeRecordRepository(db.employeeDao(), db.timeRecordDao())
@@ -57,8 +60,30 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             viewModelScope.launch {
                 try {
                     repository.syncWithCloud(savedCode)
+                    _lastSyncTime.value = System.currentTimeMillis()
                 } catch (e: Exception) {
                     e.printStackTrace()
+                }
+            }
+        }
+
+        // Periodic auto-sync worker: synchronizes automatically between different devices in the cloud every 30 seconds
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(30000) // 30 seconds interval
+                val currentCode = _companyCode.value
+                if (currentCode.isNotBlank() && !_isSyncing.value) {
+                    try {
+                        repository.syncWithCloud(currentCode)
+                        _lastSyncTime.value = System.currentTimeMillis()
+                        // Ensure active session updates immediately with fetched cloud data
+                        val user = _loggedInUser.value
+                        if (user != null) {
+                            loadEmployeeData(user.id)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
             }
         }
@@ -106,6 +131,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             _syncError.value = null
             try {
                 repository.syncWithCloud(code)
+                _lastSyncTime.value = System.currentTimeMillis()
                 val currentUser = _loggedInUser.value
                 if (currentUser != null) {
                     loadEmployeeData(currentUser.id)
@@ -128,6 +154,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             viewModelScope.launch {
                 try {
                     repository.syncWithCloud(code)
+                    _lastSyncTime.value = System.currentTimeMillis()
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -253,6 +280,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun logout() {
+        employeeDataJob?.cancel()
+        employeeDataJob = null
         _loggedInUser.value = null
         _todayRecord.value = null
         _userTimeRecords.value = emptyList()
@@ -266,9 +295,12 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         _loginError.value = null
     }
 
+    private var employeeDataJob: kotlinx.coroutines.Job? = null
+
     private fun loadEmployeeData(employeeId: Int) {
         loadNotificationsForEmployee(employeeId)
-        viewModelScope.launch {
+        employeeDataJob?.cancel()
+        employeeDataJob = viewModelScope.launch {
             repository.getTimeRecordsForEmployee(employeeId).collect { logs ->
                 _userTimeRecords.value = logs
                 

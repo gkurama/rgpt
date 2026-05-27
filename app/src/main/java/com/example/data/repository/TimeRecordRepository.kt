@@ -218,30 +218,32 @@ class TimeRecordRepository(
         return cal
     }
 
-    suspend fun resolveBucketId(companyCode: String): String = withContext(Dispatchers.IO) {
+    suspend fun resolveBucketId(companyCode: String, forceRefresh: Boolean = false): String = withContext(Dispatchers.IO) {
         val cleanCode = companyCode.lowercase().trim()
         val getUrl = URL("https://keyvalue.immanuel.co/api/KeyVal/GetValue/6q25whwl/$cleanCode")
         
         var existingBucketId: String? = null
-        try {
-            val conn = getUrl.openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-            if (conn.responseCode == HttpURLConnection.HTTP_OK) {
-                val reader = BufferedReader(InputStreamReader(conn.inputStream))
-                var res = reader.readText().trim()
-                reader.close()
-                if (res.startsWith("\"") && res.endsWith("\"")) {
-                    res = res.substring(1, res.length - 1)
+        if (!forceRefresh) {
+            try {
+                val conn = getUrl.openConnection() as HttpURLConnection
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                if (conn.responseCode == HttpURLConnection.HTTP_OK) {
+                    val reader = BufferedReader(InputStreamReader(conn.inputStream))
+                    var res = reader.readText().trim()
+                    reader.close()
+                    if (res.startsWith("\"") && res.endsWith("\"")) {
+                        res = res.substring(1, res.length - 1)
+                    }
+                    if (res.isNotBlank() && res != "null" && res != "regponto_fallback") {
+                        existingBucketId = res
+                    }
                 }
-                if (res.isNotBlank() && res != "null") {
-                    existingBucketId = res
-                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            conn.disconnect()
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
         
         if (existingBucketId != null) {
@@ -288,20 +290,25 @@ class TimeRecordRepository(
         finalBucketId
     }
 
-    suspend fun syncWithCloud(companyCode: String) = withContext(Dispatchers.IO) {
-        val bucketId = resolveBucketId(companyCode)
+    suspend fun syncWithCloud(companyCode: String) {
+        performSync(companyCode, false)
+    }
+
+    private suspend fun performSync(companyCode: String, forceRefreshBucket: Boolean): Unit = withContext(Dispatchers.IO) {
+        val bucketId = resolveBucketId(companyCode, forceRefreshBucket)
         val url = URL("https://kvdb.io/$bucketId/sync_payload")
         
         // 1. Fetch current cloud data (GET)
         var cloudJsonString: String? = null
+        var getResponseCode = -1
         try {
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 10000
             connection.readTimeout = 10000
             
-            val responseCode = connection.responseCode
-            if (responseCode == HttpURLConnection.HTTP_OK) {
+            getResponseCode = connection.responseCode
+            if (getResponseCode == HttpURLConnection.HTTP_OK) {
                 val reader = BufferedReader(InputStreamReader(connection.inputStream))
                 val sb = StringBuilder()
                 var line: String?
@@ -316,6 +323,12 @@ class TimeRecordRepository(
             e.printStackTrace()
         }
 
+        if (getResponseCode == HttpURLConnection.HTTP_NOT_FOUND && !forceRefreshBucket) {
+            // Self-heal: Create a new bucket and retry sync!
+            performSync(companyCode, true)
+            return@withContext
+        }
+        
         // 2. Fetch all local employees and records
         val localEmployeesList = employeeDao.getAllEmployeesList()
         val localRecordsList = timeRecordDao.getAllTimeRecordsList()
@@ -410,18 +423,35 @@ class TimeRecordRepository(
                 )
                 timeRecordDao.insertTimeRecord(newRecord)
             } else {
-                val merged = existingRecord.copy(
-                    entryTime = existingRecord.entryTime ?: cloudEntry,
-                    lunchOutTime = existingRecord.lunchOutTime ?: cloudLunchOut,
-                    lunchReturnTime = existingRecord.lunchReturnTime ?: cloudLunchReturn,
-                    exitTime = existingRecord.exitTime ?: cloudExit,
-                    entryLocation = existingRecord.entryLocation ?: cloudEntryLoc?.takeIf { it != "null" && it != "" },
-                    lunchOutLocation = existingRecord.lunchOutLocation ?: cloudLunchOutLoc?.takeIf { it != "null" && it != "" },
-                    lunchReturnLocation = existingRecord.lunchReturnLocation ?: cloudLunchReturnLoc?.takeIf { it != "null" && it != "" },
-                    exitLocation = existingRecord.exitLocation ?: cloudExitLoc?.takeIf { it != "null" && it != "" },
-                    notes = existingRecord.notes ?: cloudNotes?.takeIf { it != "null" && it != "" },
-                    isOffline = false
-                )
+                val merged = if (existingRecord.isOffline) {
+                    // This record has unsynced local edits, preserve local data and fill in any missing parts from the cloud
+                    existingRecord.copy(
+                        entryTime = existingRecord.entryTime ?: cloudEntry,
+                        lunchOutTime = existingRecord.lunchOutTime ?: cloudLunchOut,
+                        lunchReturnTime = existingRecord.lunchReturnTime ?: cloudLunchReturn,
+                        exitTime = existingRecord.exitTime ?: cloudExit,
+                        entryLocation = existingRecord.entryLocation ?: cloudEntryLoc?.takeIf { it != "null" && it != "" },
+                        lunchOutLocation = existingRecord.lunchOutLocation ?: cloudLunchOutLoc?.takeIf { it != "null" && it != "" },
+                        lunchReturnLocation = existingRecord.lunchReturnLocation ?: cloudLunchReturnLoc?.takeIf { it != "null" && it != "" },
+                        exitLocation = existingRecord.exitLocation ?: cloudExitLoc?.takeIf { it != "null" && it != "" },
+                        notes = existingRecord.notes ?: cloudNotes?.takeIf { it != "null" && it != "" },
+                        isOffline = false
+                    )
+                } else {
+                    // This record was already synced previously. We strictly overwrite with the server's cloud data so that any foreign register/edit from other devices will instantly sync to this device!
+                    existingRecord.copy(
+                        entryTime = cloudEntry,
+                        lunchOutTime = cloudLunchOut,
+                        lunchReturnTime = cloudLunchReturn,
+                        exitTime = cloudExit,
+                        entryLocation = cloudEntryLoc?.takeIf { it != "null" && it != "" },
+                        lunchOutLocation = cloudLunchOutLoc?.takeIf { it != "null" && it != "" },
+                        lunchReturnLocation = cloudLunchReturnLoc?.takeIf { it != "null" && it != "" },
+                        exitLocation = cloudExitLoc?.takeIf { it != "null" && it != "" },
+                        notes = cloudNotes?.takeIf { it != "null" && it != "" },
+                        isOffline = false
+                    )
+                }
                 timeRecordDao.updateTimeRecord(merged)
             }
         }
@@ -483,6 +513,12 @@ class TimeRecordRepository(
 
         val putResponseCode = putConnection.responseCode
         putConnection.disconnect()
+        
+        if (putResponseCode == HttpURLConnection.HTTP_NOT_FOUND && !forceRefreshBucket) {
+            // Self-heal: Create a new bucket and retry sync!
+            performSync(companyCode, true)
+            return@withContext
+        }
         
         if (putResponseCode != HttpURLConnection.HTTP_OK && putResponseCode != HttpURLConnection.HTTP_CREATED && putResponseCode != 204) {
             throw Exception("Falha ao salvar dados na nuvem: HTTP $putResponseCode")

@@ -80,15 +80,31 @@ fun ManagerDashboardScreen(
                     val isSyncing by viewModel.isSyncing.collectAsState()
                     
                     if (companyCode.isNotBlank()) {
-                        IconButton(onClick = { viewModel.syncWithCloud() }, enabled = !isSyncing) {
-                            if (isSyncing) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.CloudSync,
-                                    contentDescription = "Sincronizar Nuvem",
-                                    tint = MaterialTheme.colorScheme.primary
+                        val lastSyncTime by viewModel.lastSyncTime.collectAsState()
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            if (lastSyncTime != null) {
+                                val lastSyncStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(lastSyncTime!!))
+                                Text(
+                                    text = "Auto ($lastSyncStr) ",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                                    fontWeight = FontWeight.Medium
                                 )
+                            }
+                            IconButton(onClick = { viewModel.syncWithCloud() }, enabled = !isSyncing) {
+                                if (isSyncing) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.CloudSync,
+                                        contentDescription = "Sincronizar Nuvem",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
                             }
                         }
                     }

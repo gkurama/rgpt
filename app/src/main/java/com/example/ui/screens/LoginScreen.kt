@@ -49,6 +49,7 @@ fun LoginScreen(
     val companyCode by viewModel.companyCode.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
+    val lastSyncTime by viewModel.lastSyncTime.collectAsState()
 
     var activeTab by remember { mutableStateOf(0) } // 0 for Login, 1 for Register
 
@@ -108,6 +109,54 @@ fun LoginScreen(
                         fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
+
+                    if (companyCode.isNotBlank()) {
+                        // Show last sync status and auto-sync indication
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Filled.CloudSync,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Sincronização Automática Ativa",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Os aparelhos se mantêm sincronizados a cada 30 segundos de forma 100% automática.",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                
+                                val lastSyncStr = if (lastSyncTime != null) {
+                                    java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(lastSyncTime!!))
+                                } else {
+                                    "Nenhuma sincronização recente"
+                                }
+                                Text(
+                                    text = "Última atualização: $lastSyncStr",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
                     
                     OutlinedTextField(
                         value = localCodeInput,
